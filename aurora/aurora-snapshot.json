@@ -1,0 +1,281 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Parameters": {
+    "DBInstanceVersion": {
+      "Default": "2",
+      "Type": "String",
+      "Description": "Instance version number for unique identifier"
+    },
+    "DeereNetworkRDSMySQL": {
+      "Default": "sg-7debea06",
+      "Type": "String",
+      "Description": "DeereNetworkRDSMySQL"
+    },
+    "Vpc": {
+      "Type": "String",
+      "Default": "vpc-4cea7b2b",
+      "Description": "VPC Id"
+    },
+    "IsMultiAZ": {
+      "Default": false,
+      "Type": "String",
+      "Description": "True if the DB is Multi AZ. By default it is false"
+    },
+    "DBSnapshotName": {
+      "Default": "arn:aws:rds:us-east-1:244815535546:cluster-snapshot:sard1",
+      "Type": "String",
+      "Description": "Optional: DB Snapshot identifier to be used to create RDS instance"
+    },
+    "PrivateSubnet0": {
+      "Default": "subnet-57d3e47d",
+      "Type": "String",
+      "Description": "Subnet Id for PrivateSubnet0"
+    },
+    "PrivateSubnet1": {
+      "Default": "subnet-f14526fd",
+      "Type": "String",
+      "Description": "Subnet Id for PrivateSubnet1"
+    },
+
+    "RDSUserName": {
+      "Type": "String",
+      "Default": "admin",
+      "Description": "Username for DB Admin"
+    },
+    "RDSPassword": {
+      "Type": "String",
+      "Description": "Password for DB Admin"
+    },
+    "InstanceClass": {
+      "Type": "String",
+      "Default": "db.r5.large",
+      "Description": "Determines power and size of DB"
+    },
+    "NumberInstances": {
+      "Type": "String",
+      "Default": "1",
+      "Description": "Number of Instances in Cluster (boto only wants strings)"
+    },
+    "NameTag": {
+      "Default": "Products-Server-RDS",
+      "Type": "String",
+      "Description": "Name tag for policy targeting"
+    }
+  },
+  "Conditions": {
+    "CreateSecondInstance": {
+      "Fn::Equals": [
+        {
+          "Ref": "NumberInstances"
+        },
+        "2"
+      ]
+    },
+    "IsRestore": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            "",
+            {
+              "Ref": "DBSnapshotName"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "DBSubnetGroup": {
+      "Type": "AWS::RDS::DBSubnetGroup",
+      "Properties": {
+        "SubnetIds": [
+          {
+            "Ref": "PrivateSubnet0"
+          },
+          {
+            "Ref": "PrivateSubnet1"
+          }
+        ],
+        "DBSubnetGroupDescription": "Subnet to which cluster has to be associated"
+      }
+    },
+    "DBParameterGroup": {
+      "Type": "AWS::RDS::DBParameterGroup",
+      "Properties": {
+        "Description": "Products server instance parameter group",
+        "Family": "aurora5.6",
+        "Parameters": {
+          "innodb_file_format": "Barracuda",
+          "innodb_large_prefix": 1,
+          "log_bin_trust_function_creators": 1
+        }
+      }
+    },
+    "DBInstance": {
+      "Type": "AWS::RDS::DBInstance",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "Engine": "aurora",
+        "DBClusterIdentifier": {
+          "Ref": "DBCluster"
+        },
+        "DBParameterGroupName": {
+          "Ref": "DBParameterGroup"
+        },
+
+        "DBInstanceClass": {
+          "Ref": "InstanceClass"
+        },
+        "DBSubnetGroupName": {
+          "Ref": "DBSubnetGroup"
+        }
+      },
+      "DependsOn": "DBParameterGroup"
+    },
+    "DBInstance2": {
+      "Type": "AWS::RDS::DBInstance",
+      "DeletionPolicy": "Retain",
+      "Condition": "CreateSecondInstance",
+      "Properties": {
+        "Engine": "aurora",
+        "DBClusterIdentifier": {
+          "Ref": "DBCluster"
+        },
+        "DBParameterGroupName": {
+          "Ref": "DBParameterGroup"
+        },
+
+        "DBInstanceClass": {
+          "Ref": "InstanceClass"
+        },
+        "DBSubnetGroupName": {
+          "Ref": "DBSubnetGroup"
+        },
+        "DBInstanceIdentifier": {
+          "Fn::Join": [
+            "-v",
+            [
+              "products-server-instance-2",
+              {
+                "Ref": "DBInstanceVersion"
+              }
+            ]
+          ]
+        }
+      },
+      "DependsOn": "DBParameterGroup"
+    },
+    "DBClusterParameterGroup": {
+      "Type": "AWS::RDS::DBClusterParameterGroup",
+      "Properties": {
+        "Parameters": {
+          "character_set_client": "utf8mb4",
+          "character_set_connection": "utf8mb4",
+          "character_set_database": "utf8mb4",
+          "character_set_filesystem": "utf8mb4",
+          "character_set_results": "utf8mb4",
+          "character_set_server": "utf8mb4",
+          "collation_connection": "utf8mb4_general_ci",
+          "collation_server": "utf8mb4_general_ci"
+        },
+        "Family": "aurora5.6",
+        "Description": "Products server cluster parameter group"
+      }
+    },
+    "ProductsServerRDSSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "Properties": {
+        "Name": "ISG/product_management_server/ProductsRDSMasterCredentials",
+        "Description": "Secret is dynamically generated and rotated once a month by the ProductsServerRDSSecretRotatorLambda",
+        "GenerateSecretString": {
+          "SecretStringTemplate":  {
+                        "Fn::Sub": "{\"host\": \"https://\",\"port\": \"3306\",\"database\": \"ProductsServer\",\"username\": \"admin\"}"
+                    },
+          "GenerateStringKey": "password",
+          "PasswordLength": 32,
+          "ExcludeCharacters": "\"@/\\"
+        }
+      }
+    },
+    "DBCluster": {
+      "Type": "AWS::RDS::DBCluster",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "Engine": "aurora",
+        "DBClusterParameterGroupName": {
+          "Ref": "DBClusterParameterGroup"
+        },
+        "MasterUsername": {
+          "Fn::If": [
+            "IsRestore",
+            {
+              "Ref": "AWS::NoValue"
+            },
+            {
+              "Ref": "RDSUserName"
+            }
+          ]
+        },
+        "SnapshotIdentifier": {
+          "Fn::If": [
+            "IsRestore",
+            {
+              "Ref": "DBSnapshotName"
+            },
+            {
+              "Ref": "AWS::NoValue"
+            }
+          ]
+        },
+        "VpcSecurityGroupIds": [
+          {
+            "Ref": "DeereNetworkRDSMySQL"
+          }
+        ],
+        "MasterUserPassword": {
+          "Ref": "RDSPassword"
+        },
+        "StorageEncrypted": "true",
+        "DatabaseName": "ProductsServer",
+        "DBSubnetGroupName": {
+          "Ref": "DBSubnetGroup"
+        }
+      },
+      "DependsOn": [
+        "DBClusterParameterGroup"
+      ]
+    },
+    "ProductsServerRDSSecretAttachment": {
+      "Type": "AWS::SecretsManager::SecretTargetAttachment",
+      "Properties": {
+        "SecretId": {
+          "Ref": "ProductsServerRDSSecret"
+        },
+        "TargetId": {
+          "Ref": "DBCluster"
+        },
+        "TargetType": "AWS::RDS::DBCluster"
+      }
+    }
+  },
+  "Outputs": {
+    "DBSubnetGroup": {
+      "Description": "The ARN Name of the DB Cluster",
+      "Value": {
+        "Ref": "DBSubnetGroup"
+      }
+    },
+    "DBInstance": {
+      "Description": "The ARN Name of the DB",
+      "Value": {
+        "Ref": "DBInstance"
+      }
+    },
+    "DBCluster": {
+      "Description": "The ARN Name of the DB Cluster",
+      "Value": {
+        "Ref": "DBCluster"
+      }
+    }
+  }
+}
